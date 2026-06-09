@@ -30,6 +30,7 @@ import { spawnPty, type PtyHandle } from "../../transport/pty.js";
 import { HookSocket, type HookEvent } from "../../transport/hook-socket.js";
 import { TranscriptTail, type TranscriptEntry } from "../../transport/transcript-tail.js";
 import { buildHooksSettings } from "./hooks-settings.js";
+import { estimateCostUsd } from "./pricing.js";
 
 const READY_TIMEOUT_MS = 30_000;
 const PASTE_ENTER_DELAY_MS = 300;
@@ -318,6 +319,7 @@ export class ClaudeCodeAdapter extends EventEmitter {
       stopReason: this.terminalStopReason ?? (isError ? "error" : "end_turn"),
       isError,
       usage,
+      costUsd: estimateCostUsd(this.model, usage),
       tools: this.turnTools.slice(),
     };
     this.emit("usage", usage);
