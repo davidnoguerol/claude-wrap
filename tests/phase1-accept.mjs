@@ -27,7 +27,7 @@ const auth = checkSubscriptionAuth(CLAUDE, childEnv);
 check("auth resolves to subscription despite stale key", auth.ok, auth.detail);
 // leave the bogus key set in process.env so the live sessions below also prove scrubbing
 
-const ev = { toolUse: [], toolResult: [], turnComplete: null, ready: null, error: [] };
+const ev = { toolUse: [], toolResult: [], turnComplete: null, ready: null, error: [], text: [] };
 const s = new AgentSession({
   provider: "claude-code",
   cwd: REPO,
@@ -36,6 +36,7 @@ const s = new AgentSession({
   allowedTools: ["Write", "Read", "Bash", "Edit"],
 });
 s.on("ready", (e) => (ev.ready = e));
+s.on("text", (e) => ev.text.push(e));
 s.on("toolUse", (e) => ev.toolUse.push(e));
 s.on("toolResult", (e) => ev.toolResult.push(e));
 s.on("turnComplete", (e) => (ev.turnComplete = e));
@@ -59,6 +60,7 @@ try {
     check("stopReason == end_turn", ev.turnComplete.stopReason === "end_turn", ev.turnComplete.stopReason);
     check("final text contains PHASE1_DONE", /PHASE1_DONE/.test(ev.turnComplete.text), JSON.stringify(ev.turnComplete.text).slice(0, 80));
   }
+  check("text event(s) fired (response path)", ev.text.length > 0 && ev.text.some((t) => /PHASE1_DONE/.test(t.text)), `${ev.text.length} text events`);
   const names = ev.toolUse.map((t) => t.name);
   check("toolUse seen for Write+Read+Bash", ["Write", "Read", "Bash"].every((n) => names.includes(n)), names.join(","));
   check("toolResult count >= toolUse count (>0)", ev.toolResult.length >= ev.toolUse.length && ev.toolResult.length > 0, `use=${ev.toolUse.length} result=${ev.toolResult.length}`);

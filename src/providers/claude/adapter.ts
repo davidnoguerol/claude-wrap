@@ -248,11 +248,11 @@ export class ClaudeCodeAdapter extends EventEmitter {
         break;
       }
       case "Stop":
-        this.finishTurn(typeof e.last_assistant_message === "string" ? e.last_assistant_message : "", false);
+        void this.finishTurn(typeof e.last_assistant_message === "string" ? e.last_assistant_message : "", false);
         break;
       case "StopFailure":
         this.emit("error", { message: "turn ended on error (StopFailure)", fatal: false, raw: e.error });
-        this.finishTurn(typeof e.last_assistant_message === "string" ? e.last_assistant_message : "", true);
+        void this.finishTurn(typeof e.last_assistant_message === "string" ? e.last_assistant_message : "", true);
         break;
       default:
         break; // SubagentStop and others: not modeled in Phase 1/2
@@ -274,6 +274,18 @@ export class ClaudeCodeAdapter extends EventEmitter {
     if (id && en.message.usage) this.usageByMsg.set(id, en.message.usage as RawUsage);
     const sr = en.message.stop_reason;
     if (sr && sr !== "tool_use") this.terminalStopReason = this.mapStopReason(sr);
+    // Emit each assistant text block as a complete `text` event. The transcript
+    // splits one API response across lines (thinking / tool_use / text), each
+    // carrying a single content block, so we emit as text blocks land — both
+    // intermediate (via the poll) and the final one (via drain() at Stop).
+    const content = en.message.content;
+    if (Array.isArray(content)) {
+      for (const block of content as Array<{ type?: string; text?: string }>) {
+        if (block?.type === "text" && typeof block.text === "string" && block.text.length > 0) {
+          this.emit("text", { text: block.text, blockId: en.uuid, turnId: this.turnId });
+        }
+      }
+    }
   }
 
   private mapStopReason(sr: string): StopReason {
@@ -302,11 +314,23 @@ export class ClaudeCodeAdapter extends EventEmitter {
     return { turnId: this.turnId, inputTokens: i, outputTokens: o, cacheReadTokens: cr, cacheCreationTokens: cc };
   }
 
-  private finishTurn(text: string, isError: boolean): void {
+  private async finishTurn(text: string, isError: boolean): Promise<void> {
     if (!this.turnActive) return; // ignore Stop with no active turn / duplicate terminal hook
     this.turnActive = false;
-    // Synchronous catch-up so the final assistant line's usage + terminal
-    // stop_reason are counted even if Stop beat the poll timer.
+    // Stop can beat the transcript flush, so the final assistant line (its text
+    // block, usage, and terminal stop_reason) may not be on disk yet. Drain in a
+    // short bounded loop until we see a terminal stop_reason for the turn. Each
+    // drain that ingests the text line also emits the `text` event.
+    const deadline = Date.now() + 1500;
+    while (Date.now() < deadline) {
+      try {
+        this.tail?.drain();
+      } catch {
+        /* */
+      }
+      if (this.terminalStopReason) break;
+      await sleep(50);
+    }
     try {
       this.tail?.drain();
     } catch {
@@ -369,7 +393,7 @@ export class ClaudeCodeAdapter extends EventEmitter {
         }
         rj(new Error("claude exited before becoming ready"));
       }
-      if (wasTurn) this.finishTurn("", true); // resolve the in-flight turn as errored
+      if (wasTurn) void this.finishTurn("", true); // resolve the in-flight turn as errored
       this.setState("crashed");
     }
     this.cleanup();
