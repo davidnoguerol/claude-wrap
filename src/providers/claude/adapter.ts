@@ -34,7 +34,14 @@ import { estimateCostUsd } from "./pricing.js";
 
 const READY_TIMEOUT_MS = 30_000;
 const PASTE_ENTER_DELAY_MS = 300;
-const LIMIT_RE = /Claude usage limit reached|usage limit reached|usage credit limit reached|upgrade to increase your usage limit/i;
+// NOTE: the Ink TUI positions text with cursor moves, not literal spaces, so
+// after ANSI-stripping the screen text is whitespace-collapsed (e.g. "Yes,I
+// trustthisfolder"). These patterns match the whitespace-removed form.
+const LIMIT_RE = /usagelimitreached|usagecreditlimitreached|upgradetoincreaseyourusagelimit/i;
+// Folder-trust dialog shown for an untrusted cwd. SessionStart does not fire
+// until it is accepted; the default selection is "Yes, I trust this folder", so
+// a single Enter clears it (and the CLI then persists trust for that cwd).
+const TRUST_RE = /trustthisfolder|createdoroneyoutrust/i;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -85,6 +92,7 @@ export class ClaudeCodeAdapter extends EventEmitter {
   private usageByMsg = new Map<string, RawUsage>();
   private terminalStopReason?: StopReason;
   private limitBuf = "";
+  private trustHandled = false;
 
   private readyResolve?: () => void;
   private readyReject?: (e: Error) => void;
@@ -360,12 +368,17 @@ export class ClaudeCodeAdapter extends EventEmitter {
   }
 
   private onPtyData(d: string): void {
-    // PTY is liveness-only; best-effort scan for a usage-limit notice (precise
-    // phrases only, to avoid false positives from ordinary model prose).
+    // PTY is liveness only. Two screen-scrape gates: (1) auto-accept the
+    // folder-trust dialog (blocks an untrusted cwd; SessionStart won't fire
+    // until accepted), (2) best-effort usage-limit notice (precise phrases only).
     this.limitBuf = (this.limitBuf + d).slice(-4000);
+    const compact = this.limitBuf.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\s+/g, "");
+    if (!this.readied && !this.trustHandled && TRUST_RE.test(compact)) {
+      this.trustHandled = true;
+      this.pty?.write("\r"); // accept default "Yes, I trust this folder"
+    }
     if (this.state !== "limited") {
-      const clean = this.limitBuf.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
-      const m = clean.match(LIMIT_RE);
+      const m = compact.match(LIMIT_RE);
       if (m) {
         const kind = /credit/i.test(m[0]) ? "usage_credit" : "five_hour";
         this.emit("limit", { kind, raw: m[0] });
