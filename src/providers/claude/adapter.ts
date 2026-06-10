@@ -92,6 +92,7 @@ export class ClaudeCodeAdapter extends EventEmitter {
   private usageByMsg = new Map<string, RawUsage>();
   private terminalStopReason?: StopReason;
   private limitBuf = "";
+  private limitNotified = false;
   private trustHandled = false;
 
   private readyResolve?: () => void;
@@ -365,6 +366,9 @@ export class ClaudeCodeAdapter extends EventEmitter {
     this.pendingTools.clear();
     this.usageByMsg.clear();
     this.terminalStopReason = undefined;
+    // Fresh per turn so a stale phrase in the rolling buffer can't re-fire.
+    this.limitBuf = "";
+    this.limitNotified = false;
   }
 
   private onPtyData(d: string): void {
@@ -377,12 +381,15 @@ export class ClaudeCodeAdapter extends EventEmitter {
       this.trustHandled = true;
       this.pty?.write("\r"); // accept default "Yes, I trust this folder"
     }
-    if (this.state !== "limited") {
+    if (!this.limitNotified) {
       const m = compact.match(LIMIT_RE);
       if (m) {
+        // Heuristic PTY-text detection — emit as an informational signal but do
+        // NOT enter a sticky send-blocking state (a false match would brick the
+        // session). A genuine limit also surfaces as a turn error downstream.
+        this.limitNotified = true;
         const kind = /credit/i.test(m[0]) ? "usage_credit" : "five_hour";
         this.emit("limit", { kind, raw: m[0] });
-        this.setState("limited");
       }
     }
   }
@@ -416,7 +423,6 @@ export class ClaudeCodeAdapter extends EventEmitter {
     if (this.exited || !this.pty) throw new Error("session is not running");
     if (this.state === "starting") throw new Error("session is not ready yet (await start())");
     if (this.state === "busy") throw new Error("a turn is already in progress");
-    if (this.state === "limited") throw new Error("session is rate-limited");
     if (this.state !== "ready") throw new Error(`cannot send in state '${this.state}'`);
 
     this.turnCounter += 1;

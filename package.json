@@ -1,6 +1,6 @@
 {
   "name": "claude-wrap",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Drive coding-agent CLIs (Claude Code, Codex) via the terminal on subscription auth; expose a structured API to consumer projects.",
   "type": "module",
   "private": true,
