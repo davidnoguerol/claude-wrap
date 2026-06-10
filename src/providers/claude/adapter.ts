@@ -79,6 +79,7 @@ export class ClaudeCodeAdapter extends EventEmitter {
   private mcpPath?: string;
   private socketPath?: string;
   private model?: string;
+  private transcriptPath?: string;
   private exited = false;
   private cleaned = false;
   private readied = false;
@@ -116,6 +117,10 @@ export class ClaudeCodeAdapter extends EventEmitter {
   }
   getState(): SessionState {
     return this.state;
+  }
+  /** Latest transcript path learned from SessionStart; undefined before ready. */
+  getTranscriptPath(): string | undefined {
+    return this.transcriptPath;
   }
 
   private setState(s: SessionState): void {
@@ -207,6 +212,12 @@ export class ClaudeCodeAdapter extends EventEmitter {
     switch (e.hook_event_name) {
       case "SessionStart": {
         this.model = typeof e.model === "string" ? e.model : this.opts.model;
+        // Track the latest known transcript path (a later SessionStart after
+        // /clear may point at a fresh file) — but the tail stays bound to the
+        // first one; consumers that rotate sessions re-create the session.
+        if (typeof e.transcript_path === "string" && e.transcript_path.length > 0) {
+          this.transcriptPath = e.transcript_path;
+        }
         if (e.transcript_path && !this.tail) {
           this.tail = new TranscriptTail(e.transcript_path);
           this.tail.on("entry", (en: TranscriptEntry) => this.onTranscript(en));
@@ -221,7 +232,7 @@ export class ClaudeCodeAdapter extends EventEmitter {
             this.readyTimer = undefined;
           }
           this.setState("ready");
-          this.emit("ready", { sessionId: this.sessionId, model: this.model });
+          this.emit("ready", { sessionId: this.sessionId, model: this.model, transcriptPath: this.transcriptPath });
           const res = this.readyResolve;
           this.readyResolve = undefined;
           this.readyReject = undefined;
@@ -263,6 +274,33 @@ export class ClaudeCodeAdapter extends EventEmitter {
         this.emit("error", { message: "turn ended on error (StopFailure)", fatal: false, raw: e.error });
         void this.finishTurn(typeof e.last_assistant_message === "string" ? e.last_assistant_message : "", true);
         break;
+      case "PostCompact": {
+        // PostCompact (CLI ≥2.1.76) carries the full compaction summary — the
+        // only observable copy. Older CLIs simply never fire this.
+        const trigger = e.trigger === "manual" || e.trigger === "auto" ? e.trigger : "unknown";
+        const summary = typeof e.compact_summary === "string" ? e.compact_summary : undefined;
+        this.emit("compaction", { trigger, summary });
+        break;
+      }
+      case "SessionEnd":
+        this.emit("sessionEnd", { reason: typeof e.reason === "string" ? e.reason : "unknown" });
+        break;
+      case "StatusLine": {
+        // Synthetic tag injected by the forwarder (--event StatusLine); the raw
+        // payload is the CLI's statusline stdin JSON. used_percentage can be
+        // null before the first API response — map only finite numbers.
+        const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+        const cw = (e.context_window ?? {}) as Record<string, unknown>;
+        const cost = (e.cost ?? {}) as Record<string, unknown>;
+        this.emit("contextStatus", {
+          usedPercentage: num(cw.used_percentage),
+          remainingPercentage: num(cw.remaining_percentage),
+          totalInputTokens: num(cw.total_input_tokens),
+          contextWindowSize: num(cw.context_window_size),
+          costUsd: num(cost.total_cost_usd),
+        });
+        break;
+      }
       default:
         break; // SubagentStop and others: not modeled in Phase 1/2
     }

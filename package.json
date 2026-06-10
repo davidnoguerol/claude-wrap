@@ -1,6 +1,6 @@
 {
   "name": "claude-wrap",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Drive coding-agent CLIs (Claude Code, Codex) via the terminal on subscription auth; expose a structured API to consumer projects.",
   "type": "module",
   "private": true,
@@ -25,7 +25,8 @@
     "prepare": "tsc",
     "postinstall": "node scripts/postinstall.mjs",
     "probe": "node tests/interactive-probe.mjs",
-    "test:phase1": "node tests/phase1-accept.mjs"
+    "test:phase1": "node tests/phase1-accept.mjs",
+    "test": "npm run build && node --test tests/unit.test.mjs"
   },
   "dependencies": {
     "node-pty": "^1.1.0"

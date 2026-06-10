@@ -25,6 +25,10 @@ export type StopReason =
 export interface ReadyEvent {
   sessionId: string;
   model?: string;
+  /** Absolute path of the CLI's own session transcript JSONL (from the
+   *  SessionStart hook). Lets consumers read/copy the full-fidelity record
+   *  without re-deriving the CLI's path-mangling scheme. */
+  transcriptPath?: string;
 }
 
 export interface TextEvent {
@@ -79,6 +83,29 @@ export interface LimitEvent {
   raw: string;
 }
 
+/** Emitted after the CLI compacts the conversation (PostCompact hook). The
+ *  summary is the full compaction summary the CLI generated — the only place
+ *  it is observable. */
+export interface CompactionEvent {
+  trigger: "manual" | "auto" | "unknown";
+  summary?: string;
+}
+
+/** Emitted when the CLI session terminates (SessionEnd hook). */
+export interface SessionEndEvent {
+  reason: string;
+}
+
+/** Context-pressure telemetry from the CLI's statusLine channel. Fields are
+ *  optional: used_percentage can be null before the first API response. */
+export interface ContextStatusEvent {
+  usedPercentage?: number;
+  remainingPercentage?: number;
+  totalInputTokens?: number;
+  contextWindowSize?: number;
+  costUsd?: number;
+}
+
 export interface AgentErrorEvent {
   message: string;
   fatal: boolean;
@@ -114,6 +141,9 @@ export type AgentEventMap = {
   turnComplete: [TurnResult];
   usage: [UsageEvent];
   limit: [LimitEvent];
+  compaction: [CompactionEvent];
+  sessionEnd: [SessionEndEvent];
+  contextStatus: [ContextStatusEvent];
   error: [AgentErrorEvent];
   exit: [ExitEvent];
 };

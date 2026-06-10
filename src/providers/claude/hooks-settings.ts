@@ -3,6 +3,12 @@
 // wrapper's Unix socket. async:true so observation never blocks the turn.
 // Failure variants are mandatory: PostToolUseFailure (else failed tool calls are
 // silently missed) and StopFailure (else error-terminated turns are missed).
+//
+// statusLine is NOT a hooks entry — it's a sibling top-level settings key with
+// its own stdin JSON shape (no hook_event_name). We route it through the same
+// forwarder with a synthetic event tag (`--event StatusLine`) so it rides the
+// same socket. Delivered via --settings, which bypasses the workspace-trust
+// gate that applies to project/local settings statuslines.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +19,7 @@ const FORWARDER = path.resolve(here, "../../../bin/cw-hook-forward.mjs");
 
 export interface HooksSettings {
   hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ type: string; command: string; async: boolean }> }>>;
+  statusLine: { type: string; command: string };
 }
 
 export function forwarderPath(): string {
@@ -34,6 +41,12 @@ export function buildHooksSettings(socketPath: string): HooksSettings {
       Stop: plain(),
       StopFailure: plain(),
       SubagentStop: plain(),
+      // No matcher = fires for both `manual` and `auto` compaction.
+      PostCompact: plain(),
+      // Terminal cleanup signal; the CLI kills SessionEnd hooks at ~1.5s by
+      // default — the forwarder writes to a local socket in milliseconds.
+      SessionEnd: plain(),
     },
+    statusLine: { type: "command", command: `${command} --event StatusLine` },
   };
 }

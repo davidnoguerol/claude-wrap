@@ -15,6 +15,9 @@ const FORWARDED: (keyof AgentEventMap)[] = [
   "turnComplete",
   "usage",
   "limit",
+  "compaction",
+  "sessionEnd",
+  "contextStatus",
   "error",
   "exit",
 ];
@@ -70,6 +73,10 @@ export class AgentSession extends EventEmitter {
   }
   getState(): SessionState {
     return this.adapter.getState();
+  }
+  /** Latest CLI transcript path (from SessionStart); undefined before ready. */
+  getTranscriptPath(): string | undefined {
+    return this.adapter.getTranscriptPath();
   }
 
   /** Stop the current process and start a fresh one resuming the same session. */
