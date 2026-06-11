@@ -220,6 +220,11 @@ export class ClaudeCodeAdapter extends EventEmitter {
         }
         if (e.transcript_path && !this.tail) {
           this.tail = new TranscriptTail(e.transcript_path);
+          // On resume the JSONL already holds the full prior conversation. Skip
+          // it: only emit lines appended from here on. Otherwise onTranscript()
+          // re-emits every historical assistant text block as a `text` event,
+          // which a consumer relays to its channel (Rondel's post-restart flood).
+          if (this.opts.resume) this.tail.seekToEnd();
           this.tail.on("entry", (en: TranscriptEntry) => this.onTranscript(en));
           this.tail.start();
         }

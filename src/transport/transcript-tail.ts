@@ -40,6 +40,19 @@ export class TranscriptTail extends EventEmitter {
     tick();
   }
 
+  /** Advance the offset past any bytes already on disk, so only lines appended
+   *  AFTER this call are read+emitted. Used on resume: the session JSONL already
+   *  holds the full prior conversation, and re-reading it from the top would
+   *  re-emit every historical assistant block as a fresh `entry`. Must be called
+   *  before start(). Safe if the file doesn't exist yet (offset stays 0). */
+  seekToEnd(): void {
+    try {
+      this.offset = fs.statSync(this.filePath).size;
+    } catch {
+      /* file not created yet — offset 0 is correct, nothing to skip */
+    }
+  }
+
   /** One synchronous read of any newly-appended bytes + flush of complete lines.
    *  Idempotent: offset only advances; usage entries dedupe by message.id upstream. */
   drain(): void {

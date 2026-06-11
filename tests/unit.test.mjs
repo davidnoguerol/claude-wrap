@@ -1,6 +1,6 @@
-// Unit tests for the v0.1.2 surface: hooks settings shape, forwarder event
-// tagging, and adapter hook→event mapping. Run via `npm test` (builds first —
-// adapter/hooks-settings are imported from dist/).
+// Unit tests for the v0.1.2+ surface: hooks settings shape, forwarder event
+// tagging, adapter hook→event mapping, and resume history-skip. Run via
+// `npm test` (builds first — modules are imported from dist/).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { buildHooksSettings } from "../dist/providers/claude/hooks-settings.js";
 import { ClaudeCodeAdapter } from "../dist/providers/claude/adapter.js";
+import { TranscriptTail } from "../dist/transport/transcript-tail.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FORWARDER = path.join(ROOT, "bin", "cw-hook-forward.mjs");
@@ -174,4 +175,81 @@ test("StatusLine maps context_window fields and tolerates nulls", () => {
   a.onHook({ hook_event_name: "StatusLine", context_window: { used_percentage: null } });
   assert.equal(got.usedPercentage, undefined);
   a.cleanup();
+});
+
+// --- resume history-skip (the post-restart "flood" regression) ---
+
+function assistantLine(text) {
+  return JSON.stringify({ type: "assistant", uuid: text, message: { role: "assistant", content: [{ type: "text", text }] } }) + "\n";
+}
+
+test("TranscriptTail.seekToEnd skips pre-existing lines, still reads appends", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cwtail-"));
+  const tp = path.join(dir, "session.jsonl");
+  fs.writeFileSync(tp, assistantLine("history-1") + assistantLine("history-2"));
+
+  const tail = new TranscriptTail(tp);
+  const seen = [];
+  tail.on("entry", (e) => seen.push(e.uuid));
+  tail.seekToEnd(); // resume: ignore everything already on disk
+  tail.drain();
+  assert.deepEqual(seen, [], "no historical lines emitted after seekToEnd");
+
+  fs.appendFileSync(tp, assistantLine("live-1"));
+  tail.drain();
+  assert.deepEqual(seen, ["live-1"], "only the appended line emitted");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("TranscriptTail without seekToEnd reads from the top (fresh-session path)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cwtail-"));
+  const tp = path.join(dir, "session.jsonl");
+  fs.writeFileSync(tp, assistantLine("from-top"));
+
+  const tail = new TranscriptTail(tp);
+  const seen = [];
+  tail.on("entry", (e) => seen.push(e.uuid));
+  tail.drain();
+  assert.deepEqual(seen, ["from-top"], "existing lines emitted when not seeking");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("adapter resume:true does not re-emit historical assistant text", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cwres-"));
+  const tp = path.join(dir, "session.jsonl");
+  // Simulate a resumed session whose JSONL already holds prior turns.
+  fs.writeFileSync(tp, assistantLine("old reply A") + assistantLine("old reply B"));
+
+  const a = new ClaudeCodeAdapter({ provider: "claude-code", cwd: os.tmpdir(), resume: true, sessionId: "resume-test" });
+  const texts = [];
+  a.on("text", (e) => texts.push(e.text));
+  a.onHook({ hook_event_name: "SessionStart", transcript_path: tp, model: "claude-test" });
+  a.tail.drain(); // force the read the poll timer would have done
+  assert.deepEqual(texts, [], "no historical assistant text replayed on resume");
+
+  fs.appendFileSync(tp, assistantLine("fresh reply"));
+  a.tail.drain();
+  assert.deepEqual(texts, ["fresh reply"], "live assistant text still flows");
+
+  a.cleanup();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("adapter fresh (resume:false) still reads transcript from the top", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cwfresh-"));
+  const tp = path.join(dir, "session.jsonl");
+  fs.writeFileSync(tp, "");
+
+  const a = new ClaudeCodeAdapter({ provider: "claude-code", cwd: os.tmpdir(), sessionId: "fresh-test" });
+  const texts = [];
+  a.on("text", (e) => texts.push(e.text));
+  a.onHook({ hook_event_name: "SessionStart", transcript_path: tp, model: "claude-test" });
+  fs.appendFileSync(tp, assistantLine("first reply"));
+  a.tail.drain();
+  assert.deepEqual(texts, ["first reply"], "fresh session emits its assistant text");
+
+  a.cleanup();
+  fs.rmSync(dir, { recursive: true, force: true });
 });
